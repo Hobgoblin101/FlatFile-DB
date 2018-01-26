@@ -1,20 +1,50 @@
-import { truncate } from 'fs';
-
 let fs = require('fs');
-String.prototype.strip = function(){
+
+
+
+
+
+
+/**
+ * Remove trailing white space
+ */
+Buffer.prototype.strip = function(){
   let i=this.length-1;
 
-  while (this[i] === ' '){
+  while (this[i] === 0){
     i--;
   }
 
-  return this.slice(0,i);
+  return this.slice(0,i+1);
+}
+/**
+ * Replace a section of buffer with another buffer
+ * @param {Buffer} buff 
+ * @param {Number=} offset 
+ * @param {Number=} length 
+ */
+Buffer.prototype.replace = function(buff, offset=0, length=NaN){
+  if (isNaN(length)){
+    length = buff.length;
+  }
+
+  for (let i=0; i<length; i++){
+    this[i+offset] = buff[i];
+  }
+
+  return this;
 }
 
 
 
 
-//TODO add boolean type
+
+
+
+
+
+
+
 class Attribute{
   /**
    * 
@@ -23,14 +53,15 @@ class Attribute{
    * @param {string} type 
    * @param {number} size In Bytes
    */
-  constructor(parent, name, type, size){
-    if (!(parent instanceof Table)){
-      throw new Error('Invalid Attribute parent');
+  constructor(parent, name, type, pos, size){
+    if (!(parent) instanceof Entity){
+      throw new Error('Invalid Attribute definition');
     }
 
     this.parent = parent;
     this.name = name;
     this.type = type;
+    this.position = pos;
 
     //Generate types
     switch(type){
@@ -168,7 +199,7 @@ class Attribute{
         data = buff.readDoubleLE();
         break;
       case 'string':
-        data = buff.toString();
+        data = buff.strip().toString();
         break;
       case 'boolean':
         if (buff[0] === 0){
@@ -209,12 +240,19 @@ class Attribute{
 
 
 
+
+
 class Tuple{
   constructor(parent, data){
+    if (!(parent) instanceof Entity){
+      throw new Error('Invalid Tuple definition');
+    }
+
     this.parent = parent;
     this.buffer = data;
     this.data = {};
     this.empty = true;
+    this.index = -1;
 
     if (!data){
       this.erase();
@@ -227,6 +265,9 @@ class Tuple{
     return this;
   }
 
+  /**
+   * Make all of the tupe's data default values
+   */
   erase(){
     this.buffer = new Buffer(this.parent.tupleLength);
     this.empty = true;
@@ -244,6 +285,9 @@ class Tuple{
     return this;
   }
 
+  /**
+   * See if the tuple has any non-default values
+   */
   _checkEmpty(){
     this.empty = true;
 
@@ -258,35 +302,401 @@ class Tuple{
     return this;
   }
 
-  encode(){};
-  decode(){};
+  /**
+   * Encode local cache into buffer
+   */
+  encode(){
+    let i=0;
+
+    for (let attr of this.parent.fields){
+
+      // If the data has not been decoded leave the tuple it's the data in it's buffer
+      if (this.data[attr.name] === undefined){
+        continue;
+      }
+
+      let enc = attr.encode(this.data[attr.name]);
+      this.buffer.replace(enc, attr.position);
+    }
+
+    return this;
+  };
+  /**
+   * Decode buffer data, into data cache
+   * @param {String=} field if set, then it will only decode that field
+   */
+  decode(field){
+    let i=0;
+
+    if (field instanceof String){
+      for (let attr of this.parent.fields){
+        if (attr.name == field){
+          this.data[attr.name] = attr.decode(this.buffer.slice(attr.position, attr.position+attr.size));;
+        }
+      }
+    }else{ //Decode all fields
+      for (let attr of this.parent.fields){        
+        this.data[attr.name] = attr.decode(this.buffer.slice(attr.position, attr.position+attr.size));
+      }
+    }
+
+    return this;
+  };
 }
 
 
-class Table{
-  constructor(name, path){
-    if (!fs.existsSync(path)){
-      throw new Error(`Invalid database path given to ${name} (${path})`);
-    }
 
+
+
+class Entity{
+  constructor(name){
     this.name = name;
-    this.path = path;
 
     this.fields = [];
     this.tupleLength = 0;
+    this.empty = [];
+    this.rows = 0;
   }
 
+  /**
+   * Define a new attribute
+   * @param {String} name 
+   * @param {String} type 
+   * @param {Number} size 
+   */
   define(name, type, size){
-    this.fields.push(new Attribute(this, name, type, size));
-    this.tupleLength += size;
+    let a = new Attribute(this, name, type, this.tupleLength, size);
+    this.fields.push(a);
+    this.tupleLength += a.size;
   
     return this;
   }
 
+  /**
+   * Make a new tuple in context to this Trove/Table
+   * @param {Buffer} data 
+   */
   tuple(data){
     return new Tuple(this, data);
   }
 }
 
 
-module.exports = Table;
+
+
+
+class Table extends Entity{
+  constructor(name, path){
+    super();
+
+    if (!fs.existsSync(path)){
+      throw new Error(`Invalid database path given to ${name} (${path})`);
+    }
+    
+    this.path = path;
+  }
+
+  /**
+   * Loops though each row returning the relavent tuple and row index number
+   * @param {function} loop 
+   * @param {function=} finish 
+   * @returns {void}
+   */
+  forEach(loop, finish){}
+
+  /**
+   * Get a specific tuple acording to row index
+   * @param {number} index 
+   */
+  get(index){
+    if (index > this.rows){
+      throw new Error('Invalid Index');
+    }
+
+    //TODO
+  }
+
+  /**
+   * Looks though each row finding blank tuples as well as the current length of the table
+   */
+  scan(){
+    //TODO
+  }
+
+  /**
+   * Overwrite a specific row index with the tuple's data
+   * @param {number} index 
+   * @param {Tuple} tuple 
+   */
+  overwrite(index, tuple){
+    if (!(tuple instanceof Tuple)){
+      throw new Error('Invalid Tuple');
+      return null;
+    }
+
+    if (index > this.rows){
+      throw new Error('Invalid Index');
+    }
+    //TODO
+  }
+
+  /**
+   * Make a specific row index blank
+   * @param {number} index 
+   */
+  delete(index){
+    if (index > this.rows){
+      throw new Error('Invalid Index');
+    }
+
+    //TODO
+  }
+
+  /**
+   * Append a tuple to the end of the Table
+   * @param {Tuple} tuple 
+   */
+  append(tuple){
+    if (!(tuple instanceof Tuple)){
+      throw new Error('Invalid Tuple');
+      return null;
+    }
+
+    //TODO
+  }
+
+  /**
+   * Write the tuple to either a blank row or the end of the table
+   * @param {Tuple} tuple 
+   */
+  insert(tuple){
+    if (!(tuple instanceof Tuple)){
+      throw new Error('Invalid Tuple');
+      return null;
+    }
+
+    //TODO
+  }
+
+  async compact(){
+    console.info('Compacting a table stored as a file is not necessary since new data will just fill in blank rows.');
+    console.info('\tAlso it can cause conflict errors due to the use of async functions for the file system to increase speed');
+
+    return true;
+  }
+}
+
+
+
+
+
+/**
+ * Behaves like a Table, but stores it's data in RAM.
+ * This can be useful for compiling multiple tables into one file
+ */
+class Trove extends Entity{
+  constructor(name){
+    super();
+
+    this.store = new Buffer([]);
+  }
+
+  /**
+   * Loop though every tuple in the store
+   * @param {function} loop Callback
+   * @param {function=} finish Callback. Optional
+   */
+  forEach(loop, finish){
+    let i=0;
+    let s = 0;
+    let e = this.tupleLength;
+
+    while (e < this.store.length){
+      let t = this.tuple(this.store.slice(s, e));
+      t.index = i;
+
+      loop(i, t);
+
+      i += 1;
+      s = e;
+      e += this.tupleLength;
+    }
+
+    if (typeof finish == 'function'){
+      finish(i);
+    }
+  }
+
+  /**
+   * Get a tuple by index number
+   * @param {number} index 
+   * @returns {Promise}
+   */
+  async get(index){
+    if (index > this.rows){
+      return null;
+    }
+
+    let s = index*this.tupleLength;
+    let e = s + this.tupleLength;
+    let t = this.tuple(this.store.slice(s, e));
+    t.index = i;
+
+    return t;
+  }
+
+  /**
+   * Finds empty rows in the table for data to be inserted into
+   * @returns {Promise}
+   */
+  scan(){
+    let db = this;
+
+    return new Promise((resolve, reject)=>{
+      db.empty = [];
+      let count = 0;
+
+      db.forEach((index, tuple)=>{
+        if (tuple.empty){
+          this.empty.push(index);
+        }
+        count += 1;
+      }, ()=>{
+        db.rows = count;
+        resolve();
+      });
+    });
+  }
+
+  /**
+   * Overwrite a specific row with the tuple's data
+   * @param {number} index 
+   * @param {Tuple} tuple 
+   */
+  async overwrite(index, tuple){
+    if (index > this.rows){
+      return false;
+    }
+    if (!(tuple instanceof Tuple)){
+      throw new Error('Invalid Tuple');
+      return null;
+    }
+
+    tuple.encode();
+    this.store.replace(tuple.buffer, index*this.tupleLength);
+
+    return true;
+  }
+
+  /**
+   * Make the given row empty
+   * @param {number} index 
+   * @returns {Promise}
+   */
+  async delete(index){
+    if (index > this.rows){
+      return false;
+    }
+
+    if (this.empty.indexOf(index) != -1){
+      return true;
+    }
+
+    this.store.replace(this.tuple().buffer, index*this.tupleLength);
+    this.empty.push(index);
+
+    return true;
+  }
+
+  /**
+   * Write the tuple to the end of the store
+   * @param {Tuple} tuple 
+   * @returns {Promise}
+   */
+  async append(tuple){
+    if (!(tuple instanceof Tuple)){
+      throw new Error('Invalid Tuple');
+      return null;
+    }
+
+    this.rows += 1;
+    tuple.encode();
+
+    this.store = Buffer.concat([this.store, tuple.buffer]);
+
+    return true;
+  }
+
+  /**
+   * Either fill an empty row, or write to the end of the store
+   * @param {Tuple} tuple 
+   * @returns {Promise}
+   */
+  async insert(tuple){
+    if (!(tuple instanceof Tuple)){
+      throw new Error('Invalid Tuple');
+      return null;
+    }
+
+    if (this.empty.length != 0){
+      return this.overwrite(
+        this.empty.splice(0)[0],
+        tuple
+      );
+    }
+
+    this.append(tuple);
+    return this.rows;
+  }
+
+  /**
+   * Remove any empty rows
+   * @returns {Promise}
+   */
+  compact(){
+    let db = this;
+
+    return new Promise((resolve)=>{
+      db.scan()
+        .then(()=>{
+          let cache = new Buffer(db.store.length-(db.empty.length*db.tupleLength));
+          let ptrWrite = 0;
+          let count = 0;
+
+          for (let i=0; i<db.rows; i++){
+            if (db.empty.indexOf(i) == -1){
+              let s = i*this.tupleLength;
+              let e = s + this.tupleLength;
+
+              cache.replace(db.store.slice(s, e), ptrWrite);
+              ptrWrite += this.tupleLength;
+              count += 1;
+            }
+          }
+
+          this.empty = [];
+          this.rows = count;
+          this.store = cache;
+
+          resolve();
+        })
+        .catch((e)=>{
+          throw e;
+        });
+    })
+  }
+}
+
+
+
+
+
+
+
+
+
+
+module.exports = {
+  Table,
+  Trove
+};
